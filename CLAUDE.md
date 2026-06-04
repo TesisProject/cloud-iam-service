@@ -1,6 +1,6 @@
 # CLAUDE.md — ParkVision Backend (spoticar-service)
 
-Eres un arquitecto de software senior especializado en Java 21, Spring Boot 4, Axon Framework y Domain-Driven Design. Este archivo es tu referencia canónica para el desarrollo del backend de ParkVision. Toda decisión de diseño debe respetar la estructura de **monolito modular por Bounded Contexts**, las 4 capas DDD, el patrón Resource/Assembler en la capa `interfaces` y los estándares de seguridad aquí definidos.
+Eres un arquitecto de software senior especializado en Java 21, Spring Boot 4, Spring Data JPA y Domain-Driven Design. Este archivo es tu referencia canónica para el desarrollo del backend de ParkVision. Toda decisión de diseño debe respetar la estructura de **monolito modular por Bounded Contexts**, las 4 capas DDD, el patrón Resource/Assembler en la capa `interfaces` y los estándares de seguridad aquí definidos.
 
 ---
 
@@ -22,37 +22,36 @@ Este repositorio (`spoticar-service`) implementa el backend como un **monolito m
 **Monolito Modular** organizado por **Bounded Contexts** (patrón DDD).
 - Un solo proceso / artefacto desplegable.
 - Cada bounded context es autónomo dentro del monolito: tiene su propio modelo de dominio, su propia lógica y su propia persistencia (tablas separadas, mismo datasource).
-- La comunicación entre contextos ocurre vía eventos de Axon o llamadas a interfaces de aplicación públicas (`application/internal/`). **Nunca** cruzar directamente a las capas `domain` o `infrastructure` de otro contexto.
+- La comunicación entre contextos ocurre vía **eventos de dominio en proceso** (Spring `ApplicationEventPublisher` / `AbstractAggregateRoot.registerEvent`) o llamadas a interfaces de aplicación públicas (`application/internal/`). **Nunca** cruzar directamente a las capas `domain` o `infrastructure` de otro contexto.
 
 ### Componentes de Infraestructura
 
 | Componente | Rol |
 |---|---|
-| **Spring Security + JWT** | Seguridad stateless, filtro global en el request pipeline |
-| **Apache Kafka** | Eventos de dominio cross-context (disponibilidad, alertas) |
+| **Spring Security** | Seguridad del pipeline de requests (JWT stateless cuando exista el contexto `iam`) |
+| **Spring Data JPA + Hibernate** | Persistencia relacional; auditoría temporal automática |
 | **PostgreSQL** | Base de datos relacional compartida — tablas separadas por contexto |
-| **Axon Server** | Event Store + Message Bus para CQRS y Event Sourcing |
+| **springdoc-openapi** | Documentación de la API (Swagger UI / OpenAPI 3.1) |
+| **Apache Kafka** *(planeado)* | Integración con módulos externos Python (visión / predicción) |
 
 ### Flujo de una Request
 
 ```
 HTTP Request
     ↓
-[Spring Security JWT Filter]
+[Spring Security Filter]   (JWT cuando exista el contexto iam)
     ↓
-interfaces/ → Controller
+interfaces/rest → Controller        (recibe Request record + @Valid)
     ↓
-application/ → CommandGateway / QueryGateway (Axon)
+application/ → CommandService / QueryService   (orquesta el caso de uso, @Transactional)
     ↓
-domain/ → Aggregate (@CommandHandler → apply(Event))
+domain/model → Aggregate (@Entity)  (lógica de negocio)
     ↓
-Event Store (Axon) → @EventSourcingHandler (reconstruye estado)
+infrastructure/persistence → Repository (Spring Data JPA) → PostgreSQL
     ↓
-@EventHandler (Projection) → PostgreSQL (read model)
+interfaces/assembler → Assembler    (Aggregate → Resource DTO)
     ↓
-@QueryHandler → Resource (vía Assembler)
-    ↓
-HTTP Response (Resource con links HATEOAS)
+HTTP Response (JSON)
 ```
 
 ---
@@ -63,14 +62,14 @@ HTTP Response (Resource con links HATEOAS)
 |---|---|---|
 | Lenguaje | Java | 21 (LTS) |
 | Framework principal | Spring Boot | 4.0.5 |
-| CQRS / Event Sourcing | Axon Framework | 4.10.x |
-| Seguridad | Spring Security + JWT | Stateless, BCrypt para contraseñas |
-| Persistencia | Spring Data JPA + Hibernate | PostgreSQL, tablas por bounded context |
-| Mensajería cross-context | Apache Kafka | Eventos de dominio entre bounded contexts |
-| Hypermedia / Presentación | Spring HATEOAS | Patrón Resource/Assembler en capa `interfaces` |
+| Persistencia | Spring Data JPA + Hibernate | PostgreSQL, tablas por bounded context; auditoría con `@CreatedDate`/`@LastModifiedDate` |
+| Seguridad | Spring Security + JWT | Stateless, BCrypt para contraseñas (JWT pendiente del contexto `iam`) |
+| Validación | Bean Validation (Jakarta) | `@Valid` sobre los Request records en la capa `interfaces` |
+| Documentación API | springdoc-openapi | Swagger UI / OpenAPI 3.1 (línea 3.0.x para Spring Boot 4) |
+| Mensajería con módulos externos *(planeado)* | Apache Kafka | Integración con visión / predicción (Python) |
 | Utilidades | Lombok | Reducción de boilerplate |
 | Build | Maven | Wrapper incluido (`mvnw`) |
-| Tests | JUnit 5 + Mockito + AxonFramework Test | Unit + Integration |
+| Tests | JUnit 5 + Mockito + Spring Boot Test | Unit + Integration |
 
 ---
 
@@ -86,27 +85,27 @@ com.spoticar.spoticarservice/
 ├── iam/                                 # Bounded Context: Identidad y Acceso
 │   ├── interfaces/                      # Capa Interfaces — entrada HTTP y presentación
 │   │   ├── rest/                        #   Controllers REST (@RestController)
-│   │   ├── resource/                    #   Resources HATEOAS (representación HTTP)
-│   │   └── assembler/                   #   Assemblers (mapean Domain/View → Resource)
+│   │   ├── resource/                    #   Resources = DTOs de entrada/salida (records)
+│   │   └── assembler/                   #   Assemblers (mapean Aggregate → Resource)
 │   │
 │   ├── application/                     # Capa Aplicación — orquestación de casos de uso
-│   │   ├── commandservices/             #   Command Handlers / Application Command Services
-│   │   ├── queryservices/              #   Query Handlers / Application Query Services
+│   │   ├── commandservices/             #   Application Command Services (@Service, @Transactional)
+│   │   ├── queryservices/              #   Application Query Services (@Service, readOnly)
 │   │   └── internal/                   #   Servicios públicos consumibles por otros contextos
 │   │
-│   ├── domain/                          # Capa Dominio — lógica pura, sin dependencias de framework
-│   │   ├── model/                       #   Aggregates (@Aggregate), Entidades, Value Objects
+│   ├── domain/                          # Capa Dominio
+│   │   ├── model/                       #   Aggregates (@Entity), Entidades, Value Objects
 │   │   │   ├── aggregates/
 │   │   │   ├── entities/
 │   │   │   └── valueobjects/
 │   │   ├── commands/                    #   Objetos Command (inmutables, records)
-│   │   ├── events/                      #   Objetos Event (inmutables, records)
+│   │   ├── events/                      #   Eventos de dominio en proceso (records)
 │   │   ├── queries/                     #   Objetos Query (inmutables, records)
 │   │   └── exceptions/                  #   Excepciones de dominio
 │   │
 │   └── infrastructure/                  # Capa Infraestructura — detalles técnicos
-│       ├── persistence/                 #   Repositorios JPA (@Repository), entidades @Entity (read model)
-│       ├── messaging/                   #   Kafka Producers / Consumers
+│       ├── persistence/                 #   Repositorios Spring Data JPA (@Repository), converters
+│       ├── messaging/                   #   Kafka Producers / Consumers (módulos externos)
 │       ├── external/                    #   Clientes REST hacia módulos externos (RestClient)
 │       └── config/                      #   Configuraciones de Spring (@Configuration)
 │
@@ -141,82 +140,84 @@ com.spoticar.spoticarservice/
 interfaces → application → domain ← infrastructure
 ```
 
-- `domain` no importa nada de `interfaces`, `application` ni `infrastructure`.
-- `infrastructure` implementa interfaces/puertos definidos en `domain`.
-- `interfaces` solo conoce Resources, Assemblers y llama a `application` vía `CommandGateway` / `QueryGateway`.
-- **Entre bounded contexts:** un contexto solo llama a los servicios en `application/internal/` de otro. Nunca accede a su `domain` o `infrastructure`.
+- `domain` contiene los aggregates (`@Entity`), value objects, commands/queries/events y excepciones. No importa de `interfaces` ni `application`.
+- `infrastructure` provee los repositorios Spring Data JPA y converters sobre el modelo de `domain`.
+- `interfaces` solo conoce Resources, Assemblers y llama a `application` vía los **Command/Query Services**.
+- **Entre bounded contexts:** un contexto solo llama a los servicios en `application/internal/` de otro (o reacciona a sus eventos de dominio). Nunca accede a su `domain` o `infrastructure`.
 
 ---
 
 ## 5. Patrón Resource / Assembler (capa `interfaces`)
 
-La capa `interfaces` expone los datos de dominio como **Resources HTTP** usando el patrón Resource/Assembler, apoyado en Spring HATEOAS.
+La capa `interfaces` expone los datos de dominio como **Resources** (DTOs JSON planos, sin HATEOAS). El **Resource** es la representación HTTP de salida; el **Request** es el DTO de entrada; el **Assembler** mapea el aggregate al Resource.
 
-### Resource
+### Resource (DTO de salida)
 
-Un **Resource** es la representación HTTP de una entidad o vista de dominio. Extiende `RepresentationModel` para soportar links HATEOAS.
+Un **Resource** es un `record` inmutable. **Nunca** expone el aggregate `@Entity` directamente.
 
 ```java
 // interfaces/resource/ParkingSpaceResource.java
-public class ParkingSpaceResource extends RepresentationModel<ParkingSpaceResource> {
-    private Long spaceId;
-    private Long zoneId;
-    private boolean occupied;
-    private String classification;
-    // Lombok @Getter / @Setter o constructor manual
-}
+public record ParkingSpaceResource(
+        Long id,
+        Long zoneId,
+        boolean occupied,
+        String classification
+) {}
+```
+
+### Request (DTO de entrada)
+
+```java
+// interfaces/resource/OccupySpaceRequest.java
+public record OccupySpaceRequest(
+        @NotNull Long cameraId,
+        @PositiveOrZero double confidence
+) {}
 ```
 
 ### Assembler
 
-Un **Assembler** transforma una vista de dominio (o entidad de lectura) en un Resource, añadiendo los links HATEOAS correspondientes.
+Un **Assembler** (`@Component`) transforma el aggregate en su Resource. Es el único lugar donde ocurre el mapeo dominio → DTO.
 
 ```java
 // interfaces/assembler/ParkingSpaceResourceAssembler.java
 @Component
-public class ParkingSpaceResourceAssembler
-        implements RepresentationModelAssembler<ParkingSpaceView, ParkingSpaceResource> {
+public class ParkingSpaceResourceAssembler {
 
-    @Override
-    public ParkingSpaceResource toModel(ParkingSpaceView view) {
-        ParkingSpaceResource resource = new ParkingSpaceResource();
-        resource.setSpaceId(view.getSpaceId());
-        resource.setZoneId(view.getZoneId());
-        resource.setOccupied(view.isOccupied());
-        resource.setClassification(view.getClassification());
-        resource.add(linkTo(methodOn(ParkingSpaceController.class)
-                .getSpace(view.getSpaceId())).withSelfRel());
-        resource.add(linkTo(methodOn(ZoneController.class)
-                .getZone(view.getZoneId())).withRel("zone"));
-        return resource;
+    public ParkingSpaceResource toResource(ParkingSpace space) {
+        return new ParkingSpaceResource(
+                space.getId(),
+                space.getZoneId(),
+                space.isOccupied(),
+                space.getClassification());
     }
 }
 ```
 
-### Controller (usa el Assembler)
+### Controller (usa los Services + el Assembler)
 
 ```java
 // interfaces/rest/ParkingSpaceController.java
 @RestController
-@RequestMapping("/api/v1/parking/spaces")
+@RequestMapping(value = "/api/v1/parking/spaces", produces = MediaType.APPLICATION_JSON_VALUE)
 @RequiredArgsConstructor
 public class ParkingSpaceController {
 
-    private final QueryGateway queryGateway;
-    private final CommandGateway commandGateway;
+    private final ParkingSpaceCommandService commandService;
+    private final ParkingSpaceQueryService queryService;
     private final ParkingSpaceResourceAssembler assembler;
 
     @GetMapping("/{spaceId}")
     public ResponseEntity<ParkingSpaceResource> getSpace(@PathVariable Long spaceId) {
-        ParkingSpaceView view = queryGateway.query(
-            new GetSpaceStatusQuery(spaceId), ParkingSpaceView.class).join();
-        return ResponseEntity.ok(assembler.toModel(view));
+        ParkingSpace space = queryService.handle(new GetSpaceStatusQuery(spaceId))
+                .orElseThrow(() -> new SpaceNotFoundException(spaceId));
+        return ResponseEntity.ok(assembler.toResource(space));
     }
 
     @PostMapping("/{spaceId}/occupy")
     public ResponseEntity<Void> occupy(@PathVariable Long spaceId,
-                                       @RequestBody OccupySpaceRequest request) {
-        commandGateway.sendAndWait(new OccupySpaceCommand(spaceId, request.cameraId(), request.confidence()));
+                                       @Valid @RequestBody OccupySpaceRequest request) {
+        commandService.handle(new OccupySpaceCommand(spaceId, request.cameraId(), request.confidence()));
         return ResponseEntity.accepted().build();
     }
 }
@@ -224,10 +225,10 @@ public class ParkingSpaceController {
 
 ### Reglas del patrón Resource/Assembler
 
-- Un Resource **nunca** expone entidades JPA (`@Entity`) ni Aggregates directamente.
-- El Assembler es el único lugar donde ocurre el mapeo Domain/View → HTTP.
-- Las requests entrantes se reciben como `record` o clase inmutable (no el Resource), y se transforman en Commands directamente en el Controller.
-- Usar `CollectionModel<ParkingSpaceResource>` para respuestas de colección.
+- Un Resource **nunca** expone entidades JPA (`@Entity`) ni Aggregates directamente — siempre un `record`.
+- El Assembler es el único lugar donde ocurre el mapeo Aggregate → Resource.
+- Las requests entrantes se reciben como `record` con anotaciones `@Valid`/`@NotNull`, y se transforman en Commands en el Controller.
+- Las colecciones se devuelven como `List<XResource>`.
 
 ---
 
@@ -247,8 +248,8 @@ public class ParkingSpaceController {
 - JWT firmado con RS256 (par de claves asimétrico).
 - Tokens stateless — sin sesión en servidor.
 
-**Aggregate principal:** `UserAggregate`
-**Eventos:** `UserRegisteredEvent`, `UserRoleChangedEvent`, `UserDeactivatedEvent`
+**Aggregate principal (`@Entity`):** `User`
+**Eventos de dominio (opcional):** `UserRegisteredEvent`, `UserRoleChangedEvent`, `UserDeactivatedEvent`
 **Resource:** `UserResource`, `AuthenticationResource`
 **Assembler:** `UserResourceAssembler`
 
@@ -263,9 +264,8 @@ public class ParkingSpaceController {
 - Clasificación automática de zonas: `LIBRE` (<30%), `MODERADO` (30-70%), `OCUPADO` (>70%).
 - Exposición de disponibilidad actual vía Query side.
 
-**Aggregates:** `ParkingLotAggregate`, `ZoneAggregate`, `ParkingSpaceAggregate`
-**Eventos:** `ParkingLotCreatedEvent`, `SpaceOccupiedEvent`, `SpaceFreedEvent`, `ZoneStatusChangedEvent`
-**Kafka:** publica al topic `availability.updated` cuando cambia la clasificación de una zona.
+**Aggregates (`@Entity`):** `ParkingLot`, `Zone`, `ParkingSpace`
+**Eventos de dominio (opcional):** `ParkingLotCreatedEvent`, `SpaceOccupiedEvent`, `SpaceFreedEvent`, `ZoneStatusChangedEvent`
 **Resources:** `ParkingLotResource`, `ZoneResource`, `ParkingSpaceResource`
 
 ---
@@ -278,8 +278,8 @@ public class ParkingSpaceController {
 - Llama al módulo Python (Random Forest) vía `RestClient` — cliente: `PredictionEngineClient` en `infrastructure/external/`.
 - Almacena historial de predicciones y metadatos del modelo (versión, accuracy).
 
-**Aggregate principal:** `PredictionAggregate`
-**Eventos:** `PredictionRequestedEvent`, `PredictionGeneratedEvent`
+**Aggregate principal (`@Entity`):** `Prediction`
+**Eventos de dominio (opcional):** `PredictionRequestedEvent`, `PredictionGeneratedEvent`
 **Resource:** `PredictionResource`
 
 ---
@@ -292,9 +292,10 @@ public class ParkingSpaceController {
 - Recibe frames procesados vía HTTP o Kafka topic `cv.occupancy.detected`.
 - Transforma los resultados en `OccupySpaceCommand` / `FreeSpaceCommand` hacia el contexto `parking`.
 
-**Aggregate principal:** `CameraAggregate`
-**Eventos:** `FrameProcessedEvent`, `OccupancyDetectedEvent`
+**Aggregate principal (`@Entity`):** `Camera` *(implementado)*. Otras entidades del contexto: `CameraSpaceRoi`, `FrameCapture`, `OccupancyDetection`, `CameraAlert`.
+**Eventos de dominio (opcional):** `FrameProcessedEvent`, `OccupancyDetectedEvent`
 **Resource:** `CameraResource`
+**Assembler:** `CameraResourceAssembler`
 
 ---
 
@@ -307,84 +308,91 @@ public class ParkingSpaceController {
 - Llama al Firebase Admin SDK.
 - Registra historial de notificaciones.
 
-**Aggregate principal:** `NotificationAggregate`
-**Eventos:** `NotificationSentEvent`, `NotificationFailedEvent`
+**Aggregate principal (`@Entity`):** `Notification`
+**Eventos de dominio (opcional):** `NotificationSentEvent`, `NotificationFailedEvent`
 **Resource:** `NotificationResource`
 
 
-## 7. Patrones Axon Framework
+## 7. Patrones de Persistencia (Spring Data JPA en capas)
 
-### Command → Aggregate → Event → Projection
+El backend usa **JPA clásico en capas**, no Event Sourcing ni Axon. El aggregate root es una `@Entity` que hereda identidad `bigint` y auditoría temporal de una clase base compartida. Los Command/Query Services orquestan los casos de uso sobre el repositorio Spring Data.
+
+### Aggregate (`@Entity`) → Command/Query Service → Repository
 
 ```java
-// domain/commands/ — inmutable, record
-public record OccupySpaceCommand(
-    @TargetAggregateIdentifier Long spaceId,
-    Long cameraId,
-    double confidence
-) {}
+// domain/commands/ — inmutable, record (sin id en la creación: lo genera la BD)
+public record OccupySpaceCommand(Long spaceId, Long cameraId, double confidence) {}
 
-// domain/model/aggregates/ — sin @Autowired, sin dependencias de infra
-@Aggregate
-public class ParkingSpaceAggregate {
+// domain/model/aggregates/ — aggregate root JPA con lógica de negocio
+@Entity
+@Table(name = "parking_space")
+@Getter
+public class ParkingSpace extends AuditableAbstractAggregateRoot<ParkingSpace> {
 
-    @AggregateIdentifier
-    private Long spaceId;
+    @Column(nullable = false)
+    private Long zoneId;          // referencia replicada (sin FK cross-context)
+
     private boolean occupied;
 
-    @CommandHandler
-    public ParkingSpaceAggregate(CreateSpaceCommand cmd) {
-        apply(new SpaceCreatedEvent(cmd.spaceId(), cmd.zoneId()));
+    protected ParkingSpace() { }  // requerido por JPA
+
+    public ParkingSpace(CreateSpaceCommand cmd) {
+        this.zoneId = cmd.zoneId();
+        this.occupied = false;
     }
 
-    @CommandHandler
-    public void handle(OccupySpaceCommand cmd) {
+    public void occupy() {
         if (!this.occupied) {
-            apply(new SpaceOccupiedEvent(cmd.spaceId(), cmd.cameraId(), cmd.confidence()));
+            this.occupied = true;
+            // opcional: registerEvent(new SpaceOccupiedEvent(getId())) para reaccionar en otro contexto
         }
     }
-
-    @EventSourcingHandler
-    public void on(SpaceCreatedEvent e) { this.spaceId = e.spaceId(); }
-
-    @EventSourcingHandler
-    public void on(SpaceOccupiedEvent e) { this.occupied = true; }
 }
 
-// domain/events/ — inmutable, record
-public record SpaceOccupiedEvent(Long spaceId, Long cameraId, double confidence) {}
+// infrastructure/persistence/ — repositorio Spring Data JPA
+@Repository
+public interface ParkingSpaceRepository extends JpaRepository<ParkingSpace, Long> {
+    List<ParkingSpace> findByZoneId(Long zoneId);
+}
 
-// application/queryservices/ — actualiza read model y responde queries
-@Component
-@ProcessingGroup("parking-projection")
-public class ParkingSpaceProjection {
+// application/commandservices/ — orquesta la escritura
+@Service
+@RequiredArgsConstructor
+public class ParkingSpaceCommandService {
 
-    private final ParkingSpaceViewRepository repository;
+    private final ParkingSpaceRepository repository;
 
-    @EventHandler
-    public void on(SpaceOccupiedEvent e) {
-        repository.findById(e.spaceId()).ifPresent(view -> {
-            view.setOccupied(true);
-            repository.save(view);
-        });
+    @Transactional
+    public void handle(OccupySpaceCommand cmd) {
+        ParkingSpace space = repository.findById(cmd.spaceId())
+                .orElseThrow(() -> new SpaceNotFoundException(cmd.spaceId()));
+        space.occupy();
+        repository.save(space);
     }
+}
 
-    @QueryHandler
-    public ParkingSpaceView handle(GetSpaceStatusQuery query) {
-        return repository.findById(query.spaceId())
-            .orElseThrow(() -> new SpaceNotFoundException(query.spaceId()));
+// application/queryservices/ — orquesta la lectura
+@Service
+@RequiredArgsConstructor
+@Transactional(readOnly = true)
+public class ParkingSpaceQueryService {
+
+    private final ParkingSpaceRepository repository;
+
+    public Optional<ParkingSpace> handle(GetSpaceStatusQuery query) {
+        return repository.findById(query.spaceId());
     }
 }
 ```
 
-### Reglas Axon estrictas
+### Reglas de persistencia
 
-- Commands, Events y Queries son **inmutables** — usar Java `record`.
-- Los Aggregates **nunca** tienen `@Autowired` ni dependencias de infraestructura.
-- El estado del Aggregate se reconstruye **exclusivamente** mediante `@EventSourcingHandler`.
-- Las proyecciones viven en `application/queryservices/` y persisten en PostgreSQL (read model).
-- Usar `@ProcessingGroup` para asignar Event Handlers a un tracking processor nombrado.
-- El Controller **nunca** instancia Aggregates directamente — siempre usa `CommandGateway` o `QueryGateway`.
+- Commands y Queries son **inmutables** — usar Java `record`. Los commands de creación **no** llevan id (lo genera la BD con `GENERATED ALWAYS AS IDENTITY`).
+- El aggregate root extiende `AuditableAbstractAggregateRoot` (id `bigint` + `created_at`/`updated_at` automáticos). Las entidades hijas extienden `AuditableModel`.
+- La lógica de negocio vive en métodos del aggregate (`occupy()`, `activate()`, …), no en los services. Los services solo orquestan y transaccionan.
+- Los `@Service` de escritura usan `@Transactional`; los de lectura, `@Transactional(readOnly = true)`.
+- Eventos de dominio **cross-context** (opcional): se publican en proceso con `registerEvent(...)` (Spring Data los emite en `save()`) y se consumen con `@EventListener` en `application/internal/` del otro contexto. Sin Axon.
+- El Controller **nunca** instancia el repositorio directamente — siempre pasa por los Command/Query Services.
 
 ---
 
@@ -452,39 +460,40 @@ PasswordEncoder encoder = new BCryptPasswordEncoder(12);
 | Artefacto | Patrón | Ejemplo |
 |---|---|---|
 | Command | VerbSustantivo + `Command` | `OccupySpaceCommand` |
-| Event | SustantivoParticipio + `Event` | `SpaceOccupiedEvent` |
+| Event (dominio, opcional) | SustantivoParticipio + `Event` | `SpaceOccupiedEvent` |
 | Query | `Get` + Sustantivo + `Query` | `GetZoneStatusQuery` |
-| Aggregate | Entidad + `Aggregate` | `ParkingSpaceAggregate` |
-| Projection | Entidad + `Projection` | `ParkingSpaceProjection` |
-| Resource | Entidad + `Resource` | `ParkingSpaceResource` |
+| Aggregate (`@Entity`) | Entidad | `ParkingSpace` |
+| Command Service | Entidad + `CommandService` | `ParkingSpaceCommandService` |
+| Query Service | Entidad + `QueryService` | `ParkingSpaceQueryService` |
+| Resource (DTO salida) | Entidad + `Resource` | `ParkingSpaceResource` |
+| Request (DTO entrada) | Verbo + Entidad + `Request` | `OccupySpaceRequest` |
 | Assembler | Entidad + `ResourceAssembler` | `ParkingSpaceResourceAssembler` |
 | Controller | Entidad + `Controller` | `ParkingSpaceController` |
-| Repository (read) | Entidad + `ViewRepository` | `ParkingSpaceViewRepository` |
-| Repository (write) | gestionado por Axon Event Store | — |
+| Repository | Entidad + `Repository` | `ParkingSpaceRepository` |
 
 ### Identificadores
 
 - Los IDs de todas las entidades son `Long` en Java / `bigint GENERATED ALWAYS AS IDENTITY` en PostgreSQL.
-- El ID lo genera la base de datos; el comando de creación **no** lo incluye — la proyección persiste la entidad y obtiene el ID generado.
-- En Axon, el `@AggregateIdentifier` es `Long`; se asigna en el `@EventSourcingHandler` del evento de creación usando el ID retornado por el repositorio JPA del read model, o se pasa explícitamente desde el Controller cuando la BD ya retornó el ID.
+- El ID lo genera la base de datos al persistir; el comando de creación **no** lo incluye. El service obtiene el ID con `repository.save(entity).getId()`.
+- La identidad y la auditoría (`created_at`/`updated_at`) se heredan de `AuditableAbstractAggregateRoot` (aggregate roots) o `AuditableModel` (entidades hijas), en `shared/domain/model/`.
 
 ### Requests entrantes
 
-- Los cuerpos de request son **records** inmutables o clases con `@NotNull`/`@Valid`.
-- Se reciben en el Controller y se transforman directamente en Commands. No hay un "DTO de request" separado — el record de request ES el input del Controller.
+- Los cuerpos de request son **records** inmutables con anotaciones `@NotNull`/`@Valid`/`@Size`, en `interfaces/resource/`.
+- Se reciben en el Controller y se transforman en Commands. El record de Request es el DTO de entrada (distinto del Resource de salida).
 
 ### Manejo de errores
 
-- Excepciones de dominio en `<context>/domain/exceptions/`.
-- `@RestControllerAdvice` en `shared/interfaces/GlobalExceptionHandler` mapea excepciones a respuestas HTTP.
+- Excepciones de dominio en `<context>/domain/exceptions/`, extendiendo `ResourceNotFoundException` (en `shared/domain/exceptions/`) cuando aplique.
+- `@RestControllerAdvice` en `shared/interfaces/rest/GlobalExceptionHandler` mapea excepciones a respuestas HTTP usando el record `ApiError`.
 - Formato de error estándar:
   ```json
   {
     "timestamp": "2025-06-03T14:00:00Z",
     "status": 404,
-    "error": "SPACE_NOT_FOUND",
-    "message": "Parking space abc-123 not found",
-    "path": "/api/v1/parking/spaces/abc-123"
+    "error": "CAMERA_NOT_FOUND",
+    "message": "Camera 123 not found",
+    "path": "/api/v1/vision/cameras/123"
   }
   ```
 
@@ -494,15 +503,14 @@ PasswordEncoder encoder = new BCryptPasswordEncoder(12);
 
 Seguir siempre este orden:
 
-1. **Definir el Command o Query** en `<context>/domain/commands/` o `domain/queries/`.
-2. **Definir el Event** en `<context>/domain/events/` (solo si el Command muta estado).
-3. **Implementar/actualizar el Aggregate** en `domain/model/aggregates/` — añadir `@CommandHandler` y `@EventSourcingHandler`.
-4. **Implementar la Projection** en `application/queryservices/` — `@EventHandler` actualiza el read model en PostgreSQL, `@QueryHandler` lo consulta y retorna la vista.
-5. **Crear/actualizar la entidad JPA** (read model) y el `@Repository` en `infrastructure/persistence/`.
-6. **Crear el Resource** en `interfaces/resource/`.
-7. **Crear o actualizar el Assembler** en `interfaces/assembler/` — mapea la vista al Resource y añade links.
-8. **Exponer el endpoint** en `interfaces/rest/` — inyecta `CommandGateway`, `QueryGateway` y el Assembler.
-9. **Escribir tests**: unit test del Aggregate con `AggregateTestFixture`, test del Assembler, integration test con `@SpringBootTest`.
+1. **Definir el Command o Query** (records) en `<context>/domain/commands/` o `domain/queries/`.
+2. **Implementar/actualizar el Aggregate** (`@Entity`) en `domain/model/aggregates/` — extiende `AuditableAbstractAggregateRoot` y contiene la lógica de negocio en métodos.
+3. **Crear/actualizar el `@Repository`** (Spring Data JPA) en `infrastructure/persistence/`.
+4. **Implementar el Command/Query Service** en `application/commandservices/` y `application/queryservices/` — orquesta la operación sobre el repositorio (`@Transactional`).
+5. **Crear el Request y el Resource** (records) en `interfaces/resource/`.
+6. **Crear o actualizar el Assembler** (`@Component`) en `interfaces/assembler/` — mapea el aggregate al Resource.
+7. **Exponer el endpoint** en `interfaces/rest/` — inyecta los Command/Query Services y el Assembler; anota con `@Tag`/`@Operation` (springdoc).
+8. **Escribir tests**: unit test del aggregate (lógica de negocio), test del service con repositorio mockeado, integration test del controller con `@SpringBootTest` / `@WebMvcTest`.
 
 ---
 
@@ -521,12 +529,12 @@ Seguir siempre este orden:
 
 ### Checklist antes de marcar un endpoint como completo
 
-- [ ] Command/Query/Event definidos como `record` inmutables
-- [ ] Aggregate sin dependencias de infraestructura ni `@Autowired`
-- [ ] Read model actualizado en `@EventHandler`
-- [ ] Resource no expone `@Entity` ni Aggregate directamente
-- [ ] Assembler mapea vista → Resource y añade links HATEOAS
-- [ ] Test del Aggregate con `AggregateTestFixture`
-- [ ] Endpoint documentado con `@Operation` (OpenAPI/Springdoc)
+- [ ] Command/Query definidos como `record` inmutables (sin id en la creación)
+- [ ] Aggregate (`@Entity`) extiende `AuditableAbstractAggregateRoot`; la lógica vive en sus métodos
+- [ ] Command/Query Service con `@Transactional` (readOnly en lectura)
+- [ ] Resource (salida) y Request (entrada) son `record`; el Resource no expone el `@Entity`
+- [ ] Assembler mapea Aggregate → Resource
+- [ ] Tests: aggregate (lógica), service (repo mockeado), controller (`@WebMvcTest`/`@SpringBootTest`)
+- [ ] Endpoint documentado con `@Operation` (springdoc)
 - [ ] Sin credenciales hardcodeadas
-- [ ] La comunicación cross-context pasa por `application/internal/` — nunca por `domain` de otro contexto
+- [ ] La comunicación cross-context pasa por `application/internal/` o eventos de dominio — nunca por `domain` de otro contexto
