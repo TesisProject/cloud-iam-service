@@ -311,57 +311,8 @@ public class ParkingSpaceController {
 **Eventos:** `NotificationSentEvent`, `NotificationFailedEvent`
 **Resource:** `NotificationResource`
 
----
 
-## 7. Modelo de Datos (6 Módulos — 12 Tablas)
-
-Las tablas pertenecen a un solo datasource PostgreSQL. Los bounded contexts no hacen JOINs entre tablas de otros contextos — los datos necesarios se replican mediante eventos.
-
-### Módulo 1: Identidad y Acceso (iam)
-
-| Tabla | Columnas clave |
-|---|---|
-| `users` | `id` (UUID), `email`, `password_hash`, `role` (ADMIN/OPERATOR/USER), `active`, `created_at` |
-| `user_tokens` | `id`, `user_id` (FK), `token_hash`, `expires_at`, `revoked` |
-
-### Módulo 2: Estacionamientos (parking)
-
-| Tabla | Columnas clave |
-|---|---|
-| `parking_lots` | `id` (UUID), `name`, `address`, `total_capacity`, `status` |
-| `zones` | `id` (UUID), `parking_lot_id` (FK), `name`, `capacity`, `occupied_count`, `classification` |
-| `parking_spaces` | `id` (UUID), `zone_id` (FK), `space_number`, `is_occupied`, `last_updated` |
-
-### Módulo 3: Ocupación (vision)
-
-| Tabla | Columnas clave |
-|---|---|
-| `cameras` | `id` (UUID), `zone_id` (FK), `ip_address`, `status` (ACTIVE/INACTIVE/ERROR) |
-| `occupancy_records` | `id` (UUID), `space_id` (FK), `camera_id` (FK), `occupied`, `detected_at`, `confidence` |
-
-### Módulo 4: Predicciones (prediction)
-
-| Tabla | Columnas clave |
-|---|---|
-| `prediction_models` | `id` (UUID), `version`, `algorithm` (RANDOM_FOREST), `accuracy`, `deployed_at` |
-| `predictions` | `id` (UUID), `zone_id`, `model_id` (FK), `predicted_occupancy`, `target_datetime`, `confidence_score`, `created_at` |
-
-### Módulo 5: Notificaciones (notifications)
-
-| Tabla | Columnas clave |
-|---|---|
-| `notification_templates` | `id` (UUID), `type` (AVAILABILITY/ALERT), `title_template`, `body_template` |
-| `notification_history` | `id` (UUID), `user_id`, `template_id` (FK), `payload`, `status` (SENT/FAILED), `sent_at` |
-
-### Módulo 6: Administración (shared)
-
-| Tabla | Columnas clave |
-|---|---|
-| `audit_log` | `id` (UUID), `entity_type`, `entity_id`, `action`, `performed_by`, `timestamp`, `details` (JSONB) |
-
----
-
-## 8. Patrones Axon Framework
+## 7. Patrones Axon Framework
 
 ### Command → Aggregate → Event → Projection
 
@@ -437,7 +388,7 @@ public class ParkingSpaceProjection {
 
 ---
 
-## 9. Seguridad
+## 8. Seguridad
 
 ### JWT (RS256)
 
@@ -461,9 +412,9 @@ PasswordEncoder encoder = new BCryptPasswordEncoder(12);
 
 ---
 
-## 10. Integración con Módulos Externos
+## 9. Integración con Módulos Externos
 
-### 10.1 Módulo IA (Python / Random Forest)
+### 9.1 Módulo IA (Python / Random Forest)
 
 - **Cliente:** `PredictionEngineClient` en `prediction/infrastructure/external/`
 - **Contrato:**
@@ -474,7 +425,7 @@ PasswordEncoder encoder = new BCryptPasswordEncoder(12);
   { "predicted_occupancy": 0.73, "confidence_score": 0.91, "model_version": "1.3.0" }
   ```
 
-### 10.2 Módulo CV (OpenCV / Python)
+### 9.2 Módulo CV (OpenCV / Python)
 
 - **Kafka topic:** `cv.occupancy.detected`
 - **Contrato:**
@@ -487,14 +438,14 @@ PasswordEncoder encoder = new BCryptPasswordEncoder(12);
   ```
 - El consumer de `vision/infrastructure/messaging/` transforma el payload en `OccupySpaceCommand`.
 
-### 10.3 Firebase Cloud Messaging
+### 9.3 Firebase Cloud Messaging
 
 - **SDK:** `firebase-admin` (dependencia Maven) en `notifications/infrastructure/external/`
 - Las credenciales se cargan vía `FIREBASE_CREDENTIALS_PATH`. Nunca commitear el JSON al repo.
 
 ---
 
-## 11. Convenciones de Código
+## 10. Convenciones de Código
 
 ### Nomenclatura
 
@@ -502,7 +453,7 @@ PasswordEncoder encoder = new BCryptPasswordEncoder(12);
 |---|---|---|
 | Command | VerbSustantivo + `Command` | `OccupySpaceCommand` |
 | Event | SustantivoParticipio + `Event` | `SpaceOccupiedEvent` |
-| Query | `Get/Find` + Sustantivo + `Query` | `GetZoneStatusQuery` |
+| Query | `Get` + Sustantivo + `Query` | `GetZoneStatusQuery` |
 | Aggregate | Entidad + `Aggregate` | `ParkingSpaceAggregate` |
 | Projection | Entidad + `Projection` | `ParkingSpaceProjection` |
 | Resource | Entidad + `Resource` | `ParkingSpaceResource` |
@@ -513,8 +464,7 @@ PasswordEncoder encoder = new BCryptPasswordEncoder(12);
 
 ### Identificadores
 
-- Todas las entidades de dominio usan **UUID** como ID.
-- Generar en el lado del cliente/command con `UUID.randomUUID().toString()`.
+- Todas las entidades de dominio usan BigInt como ID.
 
 ### Requests entrantes
 
@@ -538,36 +488,7 @@ PasswordEncoder encoder = new BCryptPasswordEncoder(12);
 
 ---
 
-## 12. Variables de Entorno Requeridas
-
-```bash
-# Base de datos
-SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/parkvision_db
-SPRING_DATASOURCE_USERNAME=parkvision
-SPRING_DATASOURCE_PASSWORD=<secret>
-
-# JWT
-JWT_PRIVATE_KEY_PATH=/secrets/private.pem
-JWT_PUBLIC_KEY_PATH=/secrets/public.pem
-JWT_EXPIRATION_MS=86400000
-
-# Axon Server
-AXON_AXONSERVER_SERVERS=localhost:8124
-
-# Kafka
-SPRING_KAFKA_BOOTSTRAP_SERVERS=localhost:9092
-
-# Firebase
-FIREBASE_CREDENTIALS_PATH=/secrets/firebase-service-account.json
-
-# Módulos externos
-PREDICTION_ENGINE_URL=http://prediction-engine:8000
-CV_ENGINE_URL=http://cv-engine:8001
-```
-
----
-
-## 13. Cómo Implementar un Nuevo Endpoint
+## 11. Cómo Implementar un Nuevo Endpoint
 
 Seguir siempre este orden:
 
@@ -583,7 +504,7 @@ Seguir siempre este orden:
 
 ---
 
-## 14. Verificación
+## 12. Verificación
 
 ```bash
 # Compilar
