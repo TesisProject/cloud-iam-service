@@ -159,8 +159,8 @@ Un **Resource** es la representación HTTP de una entidad o vista de dominio. Ex
 ```java
 // interfaces/resource/ParkingSpaceResource.java
 public class ParkingSpaceResource extends RepresentationModel<ParkingSpaceResource> {
-    private String spaceId;
-    private String zoneId;
+    private Long spaceId;
+    private Long zoneId;
     private boolean occupied;
     private String classification;
     // Lombok @Getter / @Setter o constructor manual
@@ -207,14 +207,14 @@ public class ParkingSpaceController {
     private final ParkingSpaceResourceAssembler assembler;
 
     @GetMapping("/{spaceId}")
-    public ResponseEntity<ParkingSpaceResource> getSpace(@PathVariable String spaceId) {
+    public ResponseEntity<ParkingSpaceResource> getSpace(@PathVariable Long spaceId) {
         ParkingSpaceView view = queryGateway.query(
             new GetSpaceStatusQuery(spaceId), ParkingSpaceView.class).join();
         return ResponseEntity.ok(assembler.toModel(view));
     }
 
     @PostMapping("/{spaceId}/occupy")
-    public ResponseEntity<Void> occupy(@PathVariable String spaceId,
+    public ResponseEntity<Void> occupy(@PathVariable Long spaceId,
                                        @RequestBody OccupySpaceRequest request) {
         commandGateway.sendAndWait(new OccupySpaceCommand(spaceId, request.cameraId(), request.confidence()));
         return ResponseEntity.accepted().build();
@@ -319,8 +319,8 @@ public class ParkingSpaceController {
 ```java
 // domain/commands/ — inmutable, record
 public record OccupySpaceCommand(
-    @TargetAggregateIdentifier String spaceId,
-    String cameraId,
+    @TargetAggregateIdentifier Long spaceId,
+    Long cameraId,
     double confidence
 ) {}
 
@@ -329,7 +329,7 @@ public record OccupySpaceCommand(
 public class ParkingSpaceAggregate {
 
     @AggregateIdentifier
-    private String spaceId;
+    private Long spaceId;
     private boolean occupied;
 
     @CommandHandler
@@ -352,7 +352,7 @@ public class ParkingSpaceAggregate {
 }
 
 // domain/events/ — inmutable, record
-public record SpaceOccupiedEvent(String spaceId, String cameraId, double confidence) {}
+public record SpaceOccupiedEvent(Long spaceId, Long cameraId, double confidence) {}
 
 // application/queryservices/ — actualiza read model y responde queries
 @Component
@@ -420,7 +420,7 @@ PasswordEncoder encoder = new BCryptPasswordEncoder(12);
 - **Contrato:**
   ```json
   // POST /predict  →  Request
-  { "zone_id": "uuid", "features": { "hour": 14, "day_of_week": 2 } }
+  { "zone_id": 1, "features": { "hour": 14, "day_of_week": 2 } }
   // Response
   { "predicted_occupancy": 0.73, "confidence_score": 0.91, "model_version": "1.3.0" }
   ```
@@ -431,8 +431,8 @@ PasswordEncoder encoder = new BCryptPasswordEncoder(12);
 - **Contrato:**
   ```json
   {
-    "camera_id": "uuid",
-    "space_detections": [{ "space_id": "uuid", "occupied": true, "confidence": 0.95 }],
+    "camera_id": 1,
+    "space_detections": [{ "space_id": 42, "occupied": true, "confidence": 0.95 }],
     "frame_timestamp": "2025-06-03T14:00:00Z"
   }
   ```
@@ -464,7 +464,9 @@ PasswordEncoder encoder = new BCryptPasswordEncoder(12);
 
 ### Identificadores
 
-- Todas las entidades de dominio usan BigInt como ID.
+- Los IDs de todas las entidades son `Long` en Java / `bigint GENERATED ALWAYS AS IDENTITY` en PostgreSQL.
+- El ID lo genera la base de datos; el comando de creación **no** lo incluye — la proyección persiste la entidad y obtiene el ID generado.
+- En Axon, el `@AggregateIdentifier` es `Long`; se asigna en el `@EventSourcingHandler` del evento de creación usando el ID retornado por el repositorio JPA del read model, o se pasa explícitamente desde el Controller cuando la BD ya retornó el ID.
 
 ### Requests entrantes
 
