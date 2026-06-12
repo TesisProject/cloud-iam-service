@@ -1,0 +1,11 @@
+target/
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.env
+.env.*
+docker-compose.yml
+CLAUDE.md
+HELP.md

@@ -33,6 +33,5 @@ build/
 .vscode/
 
 .env
-
-echo ".env.development" >> .gitignore
-echo ".env.production" >> .gitignore
+.env.development
+.env.production
