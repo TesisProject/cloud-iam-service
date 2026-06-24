@@ -1,4 +1,4 @@
-# CLAUDE.md — ParkVision Backend (spoticar-service)
+# CLAUDE.md — ParkVision Backend (parkvision-service)
 
 Eres un arquitecto de software senior especializado en Java 21, Spring Boot 4, Spring Data JPA y Domain-Driven Design. Este archivo es tu referencia canónica para el desarrollo del backend de ParkVision. Toda decisión de diseño debe respetar la estructura de **monolito modular por Bounded Contexts**, las 4 capas DDD, el patrón Resource/Assembler en la capa `interfaces` y los estándares de seguridad aquí definidos.
 
@@ -7,11 +7,11 @@ Eres un arquitecto de software senior especializado en Java 21, Spring Boot 4, S
 ## 1. Visión General del Sistema
 
 **ParkVision** es un sistema de gestión inteligente de estacionamientos con:
-- Monitoreo de ocupación en tiempo real mediante cámaras IP (OpenCV).
-- Predicción de disponibilidad futura mediante modelos de Machine Learning (Python / Random Forest).
-- Notificaciones push a usuarios vía Firebase Cloud Messaging.
+- Monitoreo de ocupación en tiempo real mediante cámaras IP (OpenCV) sobre nodos Fog.
+- Predicción de disponibilidad futura mediante modelos de Machine Learning (Python / Random Forest) — *parcialmente implementado*.
+- Notificaciones a usuarios y alertas operativas (emails transaccionales vía SendGrid + historial de notificaciones in-app persistido).
 
-Este repositorio (`spoticar-service`) implementa el backend como un **monolito modular**: un único proceso desplegable donde cada carpeta de primer nivel representa un **Bounded Context** independiente con sus propias capas. Los bounded contexts se comunican entre sí únicamente a través de eventos de dominio o interfaces públicas definidas — nunca mediante acceso directo a las capas internas de otro contexto.
+Este repositorio (`parkvision-service`) implementa el backend como un **monolito modular**: un único proceso desplegable donde cada carpeta de primer nivel representa un **Bounded Context** independiente con sus propias capas. Los bounded contexts se comunican entre sí únicamente a través de eventos de dominio o interfaces públicas definidas — nunca mediante acceso directo a las capas internas de otro contexto.
 
 ---
 
@@ -28,18 +28,20 @@ Este repositorio (`spoticar-service`) implementa el backend como un **monolito m
 
 | Componente | Rol |
 |---|---|
-| **Spring Security** | Seguridad del pipeline de requests (JWT stateless cuando exista el contexto `iam`) |
+| **Spring Security + OAuth2 Resource Server** | Seguridad del pipeline de requests: JWT (RS256) stateless + autenticación por API-key para nodos Fog (contexto `iam`) |
 | **Spring Data JPA + Hibernate** | Persistencia relacional; auditoría temporal automática |
 | **PostgreSQL** | Base de datos relacional compartida — tablas separadas por contexto |
 | **springdoc-openapi** | Documentación de la API (Swagger UI / OpenAPI 3.1) |
-| **Apache Kafka** *(planeado)* | Integración con módulos externos Python (visión / predicción) |
+| **SendGrid** | Emails transaccionales (OTP de recuperación de contraseña, notificaciones) |
+| **Bucket4j** | Rate limiting por IP en endpoints sensibles (`RateLimitInterceptor`) |
+| **Apache Kafka** *(no implementado / futuro)* | Eventual integración con módulos externos Python (visión / predicción). Hoy la ingesta es REST. |
 
 ### Flujo de una Request
 
 ```
 HTTP Request
     ↓
-[Spring Security Filter]   (JWT cuando exista el contexto iam)
+[Spring Security Filter]   (JWT RS256 + API-key Fog)
     ↓
 interfaces/rest → Controller        (recibe Request record + @Valid)
     ↓
@@ -63,10 +65,12 @@ HTTP Response (JSON)
 | Lenguaje | Java | 21 (LTS) |
 | Framework principal | Spring Boot | 4.0.5 |
 | Persistencia | Spring Data JPA + Hibernate | PostgreSQL, tablas por bounded context; auditoría con `@CreatedDate`/`@LastModifiedDate` |
-| Seguridad | Spring Security + JWT | Stateless, BCrypt para contraseñas (JWT pendiente del contexto `iam`) |
+| Seguridad | Spring Security + OAuth2 Resource Server (JWT RS256) | Stateless; BCrypt (strength 12); auth por API-key (rol `FOG`); rate limiting con Bucket4j |
 | Validación | Bean Validation (Jakarta) | `@Valid` sobre los Request records en la capa `interfaces` |
-| Documentación API | springdoc-openapi | Swagger UI / OpenAPI 3.1 (línea 3.0.x para Spring Boot 4) |
-| Mensajería con módulos externos *(planeado)* | Apache Kafka | Integración con visión / predicción (Python) |
+| Documentación API | springdoc-openapi | Swagger UI / OpenAPI 3.1 (3.0.3 para Spring Boot 4) |
+| Email transaccional | SendGrid (`sendgrid-java`) | OTP de recuperación de contraseña y notificaciones |
+| Rate limiting | Bucket4j (`bucket4j-core`) | Límite por IP en endpoints sensibles |
+| Mensajería con módulos externos *(no implementado / futuro)* | Apache Kafka | Eventual integración visión / predicción (Python); hoy la ingesta es REST |
 | Utilidades | Lombok | Reducción de boilerplate |
 | Build | Maven | Wrapper incluido (`mvnw`) |
 | Tests | JUnit 5 + Mockito + Spring Boot Test | Unit + Integration |
@@ -75,10 +79,10 @@ HTTP Response (JSON)
 
 ## 4. Estructura de Paquetes
 
-El paquete raíz es `com.spoticar.spoticarservice`. Cada Bounded Context es una subcarpeta directa de la raíz.
+El paquete raíz es `com.parkvision.parkvisionservice`. Cada Bounded Context es una subcarpeta directa de la raíz.
 
 ```
-com.spoticar.spoticarservice/
+com.parkvision.parkvisionservice/
 │
 ├── shared/                              # Kernel compartido (Value Objects, excepciones base, utils)
 │
@@ -121,11 +125,11 @@ com.spoticar.spoticarservice/
 │   ├── domain/
 │   └── infrastructure/
 │
-├── vision/                              # Bounded Context: Visión Computacional
+├── occupancy/                           # Bounded Context: Ingesta de Ocupación (cámaras / nodos Fog)
 │   ├── interfaces/
-│   ├── application/
+│   ├── application/                     #   incluye application/acl/ (puerto ACL hacia parking)
 │   ├── domain/
-│   └── infrastructure/
+│   └── infrastructure/                  #   incluye infrastructure/acl/ (impl. del puerto ACL)
 │
 └── notifications/                       # Bounded Context: Notificaciones
     ├── interfaces/
@@ -238,20 +242,28 @@ public class ParkingSpaceController {
 
 **Responsabilidad:** Registro, login y gestión de roles.
 
+**Responsabilidad ampliada:** además de usuarios y roles, gestiona permisos, perfil y preferencias de usuario, favoritos y reseñas (ratings) de zonas, API-keys para nodos Fog y recuperación de contraseña por OTP.
+
 **Endpoints clave:**
-- `POST /api/v1/iam/users` — Registra usuario, emite `UserRegisteredEvent`
+- `POST /api/v1/iam/users` — Registra un usuario (público; **solo POST** es público en esta ruta)
 - `POST /api/v1/iam/auth/sign-in` — Valida credenciales, retorna JWT firmado
-- `GET /api/v1/iam/users/{userId}` — Consulta perfil de usuario
+- `POST /api/v1/iam/auth/forgot-password` · `verify-otp` · `reset-password` — Recuperación de contraseña por OTP (email SendGrid)
+- `GET /api/v1/iam/users/{userId}` — Consulta perfil (dueño o ADMIN)
+- `GET /api/v1/iam/users` — Lista usuarios (ADMIN)
+- `/api/v1/iam/api-keys/**` — Gestión de API-keys (ADMIN)
 
 **Seguridad:**
 - Contraseñas almacenadas con `BCryptPasswordEncoder` (strength = 12).
-- JWT firmado con RS256 (par de claves asimétrico).
+- JWT firmado con RS256 (par de claves asimétrico cargado vía env var; ver §8).
+- API-key para nodos Fog: header `X-API-Key`, formato `keyId.secret`, otorga rol `FOG` (`ApiKeyAuthenticationFilter`).
 - Tokens stateless — sin sesión en servidor.
 
-**Aggregate principal (`@Entity`):** `User`
-**Eventos de dominio (opcional):** `UserRegisteredEvent`, `UserRoleChangedEvent`, `UserDeactivatedEvent`
-**Resource:** `UserResource`, `AuthenticationResource`
-**Assembler:** `UserResourceAssembler`
+**Aggregates (`@Entity`):** `User`, `Role`, `ApiKey`
+**Entidades:** `Permission`, `RolePermission`, `UserProfile`, `UserPreferences`, `Favorite`, `Rating`
+**Exposición cross-context:** `iam/application/internal/IamEngagementFacade` entrega las reseñas de una zona como `ZoneRatingView` (DTO plano, display name resuelto y email enmascarado) al contexto `parking` — sin filtrar entidades de `iam`.
+**Nota:** Actualmente **no** se emiten eventos de dominio (no hay clases en `domain/events/`).
+**Resources:** `UserResource`, `AuthenticationResource`, `RoleResource`, `ApiKeyResource`, `UserProfileResource`, `UserPreferencesResource`, `FavoriteResource`, `RatingResource`
+**Assembler:** `UserResourceAssembler` (y los demás por entidad)
 
 ---
 
@@ -264,53 +276,47 @@ public class ParkingSpaceController {
 - Clasificación automática de zonas: `LIBRE` (<30%), `MODERADO` (30-70%), `OCUPADO` (>70%).
 - Exposición de disponibilidad actual vía Query side.
 
-**Aggregates (`@Entity`):** `ParkingLot`, `Zone`, `ParkingSpace`
-**Eventos de dominio (opcional):** `ParkingLotCreatedEvent`, `SpaceOccupiedEvent`, `SpaceFreedEvent`, `ZoneStatusChangedEvent`
-**Resources:** `ParkingLotResource`, `ZoneResource`, `ParkingSpaceResource`
+**Aggregates (`@Entity`):** `Zone`, `ParkingSpace` (no existe `ParkingLot`).
+**Exposición cross-context:** `parking/application/internal/ParkingContextFacade` (open-host service consumido por `occupancy` vía su ACL): aplica cambios de estado de espacios y expone snapshots de zona/espacios. Para las reseñas públicas de una zona consume `iam` vía `IamEngagementFacade`.
+**Nota:** No se emiten eventos de dominio actualmente.
+**Resources:** `ZoneResource`, `ParkingSpaceResource`, `ZoneRatingResource`
 
 ---
 
 ### 6.3 Prediction — Predicciones IA (`prediction`)
 
-**Responsabilidad:** Obtener predicciones de ocupación futura integrando el módulo Python.
+**Responsabilidad:** Almacenar y exponer predicciones de ocupación futura por zona y ventana de tiempo.
 
-**Integración:**
-- Llama al módulo Python (Random Forest) vía `RestClient` — cliente: `PredictionEngineClient` en `infrastructure/external/`.
-- Almacena historial de predicciones y metadatos del modelo (versión, accuracy).
+**Estado actual (parcial):** Solo capa de dominio + persistencia. Implementado: aggregate `OccupancyForecast`, value object `TimeWindow`, command `UpsertForecastCommand`, query `GetCurrentForecastQuery` y `OccupancyForecastRepository`. **Pendiente:** Command/Query Services, Controller/Resources y el cliente `PredictionEngineClient` (`infrastructure/external/`) hacia el módulo Python (Random Forest). **No hay endpoints todavía.**
 
-**Aggregate principal (`@Entity`):** `Prediction`
-**Eventos de dominio (opcional):** `PredictionRequestedEvent`, `PredictionGeneratedEvent`
-**Resource:** `PredictionResource`
+**Aggregate principal (`@Entity`):** `OccupancyForecast`
 
 ---
 
-### 6.4 Vision — Visión Computacional (`vision`)
+### 6.4 Occupancy — Ingesta de Ocupación (`occupancy`)
 
-**Responsabilidad:** Coordinación con el módulo OpenCV/Python.
+**Responsabilidad:** Gestión de cámaras y nodos Fog, e ingesta de los cambios de ocupación detectados por el módulo de visión (OpenCV/Python) que corre en el Fog.
 
 **Integración:**
-- Recibe frames procesados vía HTTP o Kafka topic `cv.occupancy.detected`.
-- Transforma los resultados en `OccupySpaceCommand` / `FreeSpaceCommand` hacia el contexto `parking`.
+- Ingesta vía **REST** (no Kafka): `POST /api/v1/occupancy/events` y `POST /api/v1/occupancy/cameras/{cameraId}/events`, autenticados con **API-key (rol `FOG`)**.
+- Aplica los cambios hacia `parking` a través de un **puerto ACL** (`occupancy/application/acl/ParkingContextPort`, implementado en `occupancy/infrastructure/acl/`), que consume `parking/application/internal/ParkingContextFacade`. `occupancy` **nunca** toca el `domain`/`infrastructure` de `parking`.
 
-**Aggregate principal (`@Entity`):** `Camera` *(implementado)*. Otras entidades del contexto: `CameraSpaceRoi`, `FrameCapture`, `OccupancyDetection`, `CameraAlert`.
-**Eventos de dominio (opcional):** `FrameProcessedEvent`, `OccupancyDetectedEvent`
-**Resource:** `CameraResource`
+**Aggregates (`@Entity`):** `Camera`, `Node`. Logs de ocupación: `OccupancyLog`, `ZoneOccupancyLog`. Value object: `SpotStatus`.
+**Resources:** `CameraResource`, `NodeResource`
 **Assembler:** `CameraResourceAssembler`
 
 ---
 
 ### 6.5 Notifications — Notificaciones (`notifications`)
 
-**Responsabilidad:** Envío de notificaciones push vía Firebase Cloud Messaging.
+**Responsabilidad:** Persistir el historial de notificaciones a usuarios y gestionar las alertas de cámara (fallos / incidencias).
 
 **Integración:**
-- Consume Kafka topics: `availability.critical`, `prediction.alert`.
-- Llama al Firebase Admin SDK.
-- Registra historial de notificaciones.
+- Emails transaccionales vía **SendGrid** (no Firebase, no Kafka).
+- Persistencia del historial de notificaciones y de alertas de cámara.
 
-**Aggregate principal (`@Entity`):** `Notification`
-**Eventos de dominio (opcional):** `NotificationSentEvent`, `NotificationFailedEvent`
-**Resource:** `NotificationResource`
+**Aggregates (`@Entity`):** `Notification`, `CameraAlert`. Entidad: `CameraAlertNotification`.
+**Resources:** `NotificationResource`, `CameraAlertResource`
 
 
 ## 7. Patrones de Persistencia (Spring Data JPA en capas)
@@ -400,11 +406,24 @@ public class ParkingSpaceQueryService {
 
 ### JWT (RS256)
 
-- Clave privada para firmar (fuera del repo, cargada vía env var).
-- Clave pública para verificar en el filtro de Spring Security.
-- Claims mínimos: `sub` (userId), `role`, `iat`, `exp`.
-- Expiración: 24h access token, 7d refresh token.
-- Tokens stateless — sin `HttpSession`.
+- Par de claves RSA cargado desde configuración: `iam.jwt.public-key` / `iam.jwt.private-key` (PEM, vía env vars `IAM_JWT_PUBLIC_KEY` / `IAM_JWT_PRIVATE_KEY`), en `IamConfiguration`.
+- **Fallback de dev:** si las claves no están configuradas se genera un par **efímero** y se loguea un `WARN` — los tokens no sobreviven a reinicios ni a despliegues multi-instancia. **En producción las claves son obligatorias.**
+- Verificación vía OAuth2 Resource Server (`NimbusJwtDecoder`); el rol del claim `role` se mapea a `ROLE_<role>` (`JwtAuthenticationConverter` en `SecurityConfig`).
+- Claims: `sub` (userId), `role`, `iat`, `exp`. Tokens stateless — sin `HttpSession`.
+
+### API-key (nodos Fog)
+
+- `ApiKeyAuthenticationFilter` lee el header `X-API-Key` (formato `keyId.secret`) y otorga `ROLE_FOG`. Se registra antes del `BearerTokenAuthenticationFilter`.
+- Protege los endpoints de ingesta de `occupancy` (`POST /api/v1/occupancy/events`, `/cameras/*/events`).
+
+### Cadenas de filtros (`SecurityConfig`)
+
+- **Cadena pública** (`publicFilterChain`): un `securityMatcher` sensible al método selecciona solo rutas públicas — `POST /api/v1/iam/users`, `/api/v1/iam/auth/**`, `GET .../zones/*/ratings`, Swagger y `/error`. **Importante:** el matcher debe distinguir el método HTTP; de lo contrario rutas compartidas (p.ej. el `GET` admin de `/iam/users`) caerían en la cadena sin JWT y nunca podrían autorizar.
+- **Cadena protegida** (`protectedFilterChain`): JWT + API-key; `anyRequest().authenticated()` y autorización por método con `@PreAuthorize` / `@EnableMethodSecurity`.
+
+### Rate limiting
+
+- `RateLimitInterceptor` (Bucket4j) aplica un límite por IP en endpoints sensibles.
 
 ### BCrypt
 
@@ -415,17 +434,17 @@ PasswordEncoder encoder = new BCryptPasswordEncoder(12);
 
 ### CORS
 
-- Configurar CORS globalmente en `shared/infrastructure/config/SecurityConfig.java`.
+- Configurado globalmente en `shared/infrastructure/config/SecurityConfig.java` (aplicado en ambas cadenas).
 - Los endpoints internos entre bounded contexts no necesitan CORS (mismo proceso).
 
 ---
 
 ## 9. Integración con Módulos Externos
 
-### 9.1 Módulo IA (Python / Random Forest)
+### 9.1 Módulo IA (Python / Random Forest) — *pendiente*
 
-- **Cliente:** `PredictionEngineClient` en `prediction/infrastructure/external/`
-- **Contrato:**
+- **Cliente previsto:** `PredictionEngineClient` en `prediction/infrastructure/external/` (aún no implementado).
+- **Contrato previsto:**
   ```json
   // POST /predict  →  Request
   { "zone_id": 1, "features": { "hour": 14, "day_of_week": 2 } }
@@ -433,23 +452,19 @@ PasswordEncoder encoder = new BCryptPasswordEncoder(12);
   { "predicted_occupancy": 0.73, "confidence_score": 0.91, "model_version": "1.3.0" }
   ```
 
-### 9.2 Módulo CV (OpenCV / Python)
+### 9.2 Módulo CV (OpenCV / Python) — ingesta REST
 
-- **Kafka topic:** `cv.occupancy.detected`
-- **Contrato:**
-  ```json
-  {
-    "camera_id": 1,
-    "space_detections": [{ "space_id": 42, "occupied": true, "confidence": 0.95 }],
-    "frame_timestamp": "2025-06-03T14:00:00Z"
-  }
-  ```
-- El consumer de `vision/infrastructure/messaging/` transforma el payload en `OccupySpaceCommand`.
+- La detección corre en el **nodo Fog**, que reporta los cambios al backend por **REST** (no Kafka):
+  - `POST /api/v1/occupancy/cameras/{cameraId}/events` (lote por cámara) y `POST /api/v1/occupancy/events`.
+  - Autenticación por **API-key (rol `FOG`)**.
+- El Command Service de `occupancy` transforma el payload y aplica el cambio hacia `parking` vía el puerto ACL (`ParkingContextPort`).
+- *Kafka (`cv.occupancy.detected`) queda como evolución futura, no está implementado.*
 
-### 9.3 Firebase Cloud Messaging
+### 9.3 Email transaccional (SendGrid)
 
-- **SDK:** `firebase-admin` (dependencia Maven) en `notifications/infrastructure/external/`
-- Las credenciales se cargan vía `FIREBASE_CREDENTIALS_PATH`. Nunca commitear el JSON al repo.
+- **SDK:** `sendgrid-java`. El envío vive en `iam/infrastructure/email/EmailService` (OTP de recuperación de contraseña) y se reutiliza para notificaciones.
+- Configuración vía `SENDGRID_API_KEY` y `MAIL_FROM`. Nunca commitear la API key.
+- *Firebase Cloud Messaging no está implementado.*
 
 ---
 
@@ -493,7 +508,7 @@ PasswordEncoder encoder = new BCryptPasswordEncoder(12);
     "status": 404,
     "error": "CAMERA_NOT_FOUND",
     "message": "Camera 123 not found",
-    "path": "/api/v1/vision/cameras/123"
+    "path": "/api/v1/occupancy/cameras/123"
   }
   ```
 
