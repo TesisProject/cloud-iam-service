@@ -1,5 +1,11 @@
 HELP.md
 target/
+
+# Claves RSA generadas por deploy/azure.sh — NUNCA commitear (sobre todo la privada)
+*.pem
+
+# Secretos locales del despliegue (contraseña de BD, etc.) — NUNCA commitear
+deploy/secrets.env
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
