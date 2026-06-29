@@ -1,6 +1,7 @@
 package com.parkvision.iam.infrastructure.config;
 
 import com.parkvision.shared.infrastructure.security.SecuritySupport;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -25,15 +26,16 @@ import java.util.List;
 @EnableMethodSecurity
 public class SecurityConfig {
 
-    private static final List<String> ALLOWED_ORIGINS = List.of(
-            "https://park-vision-frontend.netlify.app",
-            "http://localhost:*");
+    // Orígenes CORS permitidos (separados por comas). Configurable vía la env var CORS_ALLOWED_ORIGINS.
+    // Default: frontend Netlify, localhost y el dominio de Azure Container Apps (Swagger vía gateway).
+    @Value("${cors.allowed-origins:https://park-vision-frontend.netlify.app,http://localhost:*,https://*.azurecontainerapps.io}")
+    private String allowedOrigins;
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
                 .cors(cors -> cors.configurationSource(
-                        SecuritySupport.corsConfigurationSource(ALLOWED_ORIGINS)))
+                        SecuritySupport.corsConfigurationSource(allowedOrigins)))
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
