@@ -1,4 +1,6 @@
-target/
+**/target/
+.git/
+.github/
 .idea/
 .vscode/
 *.iml
@@ -6,6 +8,6 @@ target/
 *.iws
 .env
 .env.*
-docker-compose.yml
+docker-compose*.yml
 CLAUDE.md
 HELP.md

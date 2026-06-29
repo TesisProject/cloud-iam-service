@@ -1,0 +1,50 @@
+spring:
+  application:
+    name: iam-service
+  config:
+    import: optional:file:./.env[.properties]
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/parkvision_iam}
+    username: ${SPRING_DATASOURCE_USERNAME:parkvision}
+    password: ${SPRING_DATASOURCE_PASSWORD:parkvision}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+      naming:
+        physical-strategy: org.hibernate.boot.model.naming.CamelCaseToUnderscoresNamingStrategy
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+    show-sql: true
+    defer-datasource-initialization: true
+  mail:
+    from: ${MAIL_FROM:no-reply@parkvision.app}
+
+server:
+  port: ${SERVER_PORT:8081}
+
+# === SendGrid HTTP API ===
+sendgrid:
+  api-key: ${SENDGRID_API_KEY:}
+
+# === JWT (RS256) — iam es el EMISOR: necesita clave pública y privada ===
+# Si quedan vacías se genera un par EFÍMERO (solo dev): los tokens no sobreviven reinicios.
+iam:
+  jwt:
+    public-key: ${IAM_JWT_PUBLIC_KEY:}
+    private-key: ${IAM_JWT_PRIVATE_KEY:}
+
+# === Swagger UI ===
+springdoc:
+  swagger-ui:
+    operations-sorter: method
+
+# === Service discovery (Eureka) ===
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_CLIENT_SERVICEURL:http://localhost:8761/eureka}
+  instance:
+    prefer-ip-address: true
