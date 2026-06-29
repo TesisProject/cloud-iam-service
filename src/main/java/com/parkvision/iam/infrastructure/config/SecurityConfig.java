@@ -26,16 +26,12 @@ import java.util.List;
 @EnableMethodSecurity
 public class SecurityConfig {
 
-    // Orígenes CORS permitidos (separados por comas). Configurable vía la env var CORS_ALLOWED_ORIGINS.
-    // Default: frontend Netlify, localhost y el dominio de Azure Container Apps (Swagger vía gateway).
-    @Value("${cors.allowed-origins:https://park-vision-frontend.netlify.app,http://localhost:*,https://*.azurecontainerapps.io}")
-    private String allowedOrigins;
-
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
-                .cors(cors -> cors.configurationSource(
-                        SecuritySupport.corsConfigurationSource(allowedOrigins)))
+                // CORS lo maneja exclusivamente el gateway (única entrada pública). El servicio NO
+                // añade headers CORS para no duplicar Access-Control-Allow-Origin con los del gateway.
+                .cors(AbstractHttpConfigurer::disable)
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
