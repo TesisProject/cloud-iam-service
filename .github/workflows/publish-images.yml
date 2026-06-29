@@ -6,7 +6,9 @@ name: Publish images
 #   (útil mientras el refactor aún no está en main).
 on:
   push:
-    branches: ["main"]
+    # `refactor/**` permite probar el publish antes de mergear a main (workflow_dispatch
+    # solo aparece cuando el workflow ya vive en la rama por defecto).
+    branches: ["main", "refactor/**"]
   workflow_dispatch:
 
 env:
@@ -51,6 +53,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.service }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
             type=sha,format=short
 
       - name: Set up Buildx
