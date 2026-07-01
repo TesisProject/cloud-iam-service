@@ -10,6 +10,9 @@ jobs:
   test:
     name: Build & Test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read          # resolver parkvision-shared desde GitHub Packages
 
     services:
       postgres:
@@ -39,9 +42,12 @@ jobs:
 
       - name: Run tests
         env:
+          # Credenciales para GitHub Packages (parkvision-shared) — ver settings.xml
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/parkvision_db
           SPRING_DATASOURCE_USERNAME: parkvision
           SPRING_DATASOURCE_PASSWORD: parkvision
           MAIL_USERNAME: test@example.com
           MAIL_PASSWORD: dummy
-        run: ./mvnw test
+        run: ./mvnw -s settings.xml test

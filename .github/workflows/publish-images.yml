@@ -1,38 +1,23 @@
-name: Publish images
+name: Publish image
 
-# Construye y publica las imágenes de cada servicio en GitHub Container Registry (ghcr.io).
+# Construye y publica la imagen de este servicio en GitHub Container Registry (ghcr.io).
 # - push a main: publica con tag `latest` + sha corto.
-# - workflow_dispatch: permite ejecutarlo a mano desde la pestaña Actions sobre cualquier rama
-#   (útil mientras el refactor aún no está en main).
+# - workflow_dispatch: ejecutable a mano desde Actions sobre cualquier rama.
 on:
   push:
-    # `refactor/**` permite probar el publish antes de mergear a main (workflow_dispatch
-    # solo aparece cuando el workflow ya vive en la rama por defecto).
     branches: ["main", "refactor/**"]
   workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
+  IMAGE_NAME: iam-service
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write       # necesario para que GITHUB_TOKEN pueda publicar en ghcr.io
-
-    strategy:
-      fail-fast: false
-      matrix:
-        # El nombre = carpeta del módulo = nombre del Dockerfile (context = raíz del repo).
-        service:
-          - iam-service
-          - parking-service
-          - occupancy-service
-          - prediction-service
-          - notifications-service
-          - parkvision-gateway
-          - parkvision-discovery
+      packages: write       # publicar la imagen y leer parkvision-shared
 
     steps:
       - name: Checkout
@@ -49,8 +34,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          # metadata-action pasa el nombre a minúsculas (ghcr lo exige): TesisProject -> tesisproject
-          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.service }}
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch
@@ -62,10 +46,15 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: .                              # raíz del repo (reactor Maven multi-módulo)
-          file: ${{ matrix.service }}/Dockerfile
+          context: .                              # raíz del repo (módulo único)
+          file: Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # parkvision-shared se resuelve desde GitHub Packages durante el build
+          build-args: |
+            GITHUB_ACTOR=${{ github.actor }}
+          secrets: |
+            github_token=${{ secrets.GITHUB_TOKEN }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

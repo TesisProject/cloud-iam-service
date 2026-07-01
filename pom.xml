@@ -20,6 +20,19 @@
         <spring-cloud.version>2025.1.2</spring-cloud.version>
     </properties>
 
+    <!--
+      parkvision-shared se consume como artefacto publicado en GitHub Packages
+      (repo TesisProject/cloud-shared). Requiere autenticación: ver settings.xml.
+    -->
+    <repositories>
+        <repository>
+            <id>github-parkvision-shared</id>
+            <url>https://maven.pkg.github.com/TesisProject/cloud-shared</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>true</enabled></snapshots>
+        </repository>
+    </repositories>
+
     <dependencyManagement>
         <dependencies>
             <dependency>
