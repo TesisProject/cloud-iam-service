@@ -1,0 +1,52 @@
+# ParkVision — IAM service (stack autónomo para desarrollo local).
+# Levanta el servicio + SU PROPIA base de datos Postgres dedicada. No comparte
+# datasource con los demás microservicios: cada repo tiene su compose y su BD.
+#
+#   # 1) compilar el jar (el codigo compartido va incluido en el repo, sin credenciales):
+#   ./mvnw -DskipTests package
+#   # 2) construir y levantar
+#   docker compose up --build -d
+#
+#   iam        → http://localhost:8081/swagger-ui.html
+#   postgres   → localhost:5432 / db parkvision_iam (user/pass parkvision)
+name: parkvision-iam
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: iam-postgres
+    environment:
+      POSTGRES_USER: parkvision
+      POSTGRES_PASSWORD: parkvision
+      POSTGRES_DB: parkvision_iam
+    ports:
+      - "5432:5432"
+    volumes:
+      - iam_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U parkvision -d parkvision_iam"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  iam-service:
+    build:
+      context: .
+    image: iam-service:local
+    container_name: iam-service
+    env_file:
+      - .env
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/parkvision_iam
+      SPRING_DATASOURCE_USERNAME: parkvision
+      SPRING_DATASOURCE_PASSWORD: parkvision
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  iam_pgdata:
