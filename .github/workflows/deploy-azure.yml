@@ -29,8 +29,5 @@ jobs:
           containerAppName: cloud-iam-service
           resourceGroup: ParkVision
           imageToDeploy: ghcr.io/tesisproject/cloud-iam-service:latest
-          registryUrl: ghcr.io
-          registryUsername: ${{ github.actor }}
-          registryPassword: ${{ secrets.GHCR_PAT }}
           targetPort: 8081
           ingress: external
