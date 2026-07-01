@@ -1,4 +1,6 @@
-**/target/
+# El jar compilado (target/*.jar) SÍ entra al contexto de build; el resto de target no.
+target/*
+!target/*.jar
 .git/
 .github/
 .idea/
