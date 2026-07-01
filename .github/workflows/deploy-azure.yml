@@ -31,3 +31,19 @@ jobs:
           imageToDeploy: ghcr.io/tesisproject/cloud-iam-service:latest
           targetPort: 8081
           ingress: external
+
+      # Variables de entorno gestionadas desde GitHub (Secrets + Variables), no hardcodeadas.
+      # Lo sensible se guarda como SECRETS del Container App y las env vars lo referencian con secretref.
+      - name: Configure secrets & environment variables
+        run: |
+          az containerapp secret set -n cloud-iam-service -g ParkVision --secrets \
+            db-password="${{ secrets.SPRING_DATASOURCE_PASSWORD }}" \
+            iam-jwt-private="${{ secrets.IAM_JWT_PRIVATE_KEY }}" \
+            iam-jwt-public="${{ secrets.IAM_JWT_PUBLIC_KEY }}"
+          az containerapp update -n cloud-iam-service -g ParkVision --set-env-vars \
+            SPRING_DATASOURCE_URL="${{ vars.SPRING_DATASOURCE_URL }}" \
+            SPRING_DATASOURCE_USERNAME="${{ vars.SPRING_DATASOURCE_USERNAME }}" \
+            SPRING_DATASOURCE_PASSWORD=secretref:db-password \
+            IAM_JWT_PRIVATE_KEY=secretref:iam-jwt-private \
+            IAM_JWT_PUBLIC_KEY=secretref:iam-jwt-public \
+            MAIL_FROM="${{ vars.MAIL_FROM }}"
